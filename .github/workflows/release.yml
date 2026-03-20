@@ -14,9 +14,6 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -120,32 +117,16 @@ jobs:
           fi
 
           # ── Contributors (Name + @username) ──────────────
-          # Uses the commits API which returns the GitHub login directly.
-          # Deduplicates by login (not name, since one person can have
-          # multiple git author names like "Dopey" and "ThePrimeJnr").
-          CONTRIBUTORS=""
+          # Uses the commits API which maps git emails to GitHub accounts.
+          # Deduplicates by login so the same person with different git
+          # names (e.g., "Dopey" and "ThePrimeJnr") appears only once.
+          CONTRIBUTORS=$(gh api "repos/${GITHUB_REPOSITORY}/commits?per_page=100&sha=${TAG}" \
+            -q '[.[] | select(.author != null) | select(.author.login != "dependabot[bot]") | select(.author.login != "web-flow") | {login: .author.login, name: .commit.author.name}] | unique_by(.login) | .[] | "- **\(.name)** ([@\(.login)](https://github.com/\(.login)))"' \
+            2>/dev/null || echo "")
 
-          # Get unique GitHub logins from commits in this release
-          gh api "repos/${GITHUB_REPOSITORY}/commits?per_page=100&sha=${TAG}" \
-            -q '.[] | "\(.author.login // "")||\(.commit.author.name)"' \
-            2>/dev/null | sort -u -t'|' -k1,1 > /tmp/authors.txt || true
-
-          declare -A SEEN_LOGINS
-          while IFS= read -r entry; do
-            [ -z "$entry" ] && continue
-            login=$(echo "$entry" | cut -d'|' -f1)
-            name=$(echo "$entry" | cut -d'|' -f3)
-
-            [ -z "$login" ] && continue
-            [ "$login" = "dependabot[bot]" ] && continue
-            [ "$login" = "web-flow" ] && continue
-
-            # Deduplicate by login
-            if [ -z "${SEEN_LOGINS[$login]+x}" ]; then
-              SEEN_LOGINS[$login]=1
-              CONTRIBUTORS="${CONTRIBUTORS}- **${name}** ([@${login}](https://github.com/${login}))\n"
-            fi
-          done < /tmp/authors.txt
+          if [ -z "$CONTRIBUTORS" ]; then
+            CONTRIBUTORS="- Contributors could not be resolved"
+          fi
 
           # ── Build the full body ───────────────────────────
           {
@@ -167,7 +148,7 @@ jobs:
             echo ""
             echo "Thank you to everyone who contributed to this release:"
             echo ""
-            echo -e "$CONTRIBUTORS"
+            echo "$CONTRIBUTORS"
             if [ -n "$PREV_TAG" ]; then
               echo "---"
               echo ""
