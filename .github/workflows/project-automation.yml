@@ -1,29 +1,38 @@
 name: Project Automation
 
-# Handles cases that built-in GitHub Project workflows can't cover.
+# Keeps the "Lernza Roadmap" project board in sync with issue/PR lifecycle.
 #
-# Built-in workflows (enable in project settings UI) handle:
-#   Item added to project   → Backlog
-#   Item closed             → Done
-#   Item reopened           → Todo
-#   PR linked to issue      → In Review
-#   PR merged               → Done
-#   Auto-close issue        → board "Done" closes the issue (bidirectional)
-#   Code changes requested  → In Progress
-#   Code review approved    → In Review
-#   Auto-add to project     → adds new repo issues automatically
-#
-# This workflow handles what built-ins can't:
-#   Issue assigned          → In Progress
-#   Issue unassigned        → Todo (if no assignees left)
-#   Issue closed not_planned→ Invalid (overrides built-in "Done")
-#   PR closed without merge → linked issues back to Todo
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │  Built-in project workflows (configured in project settings UI):   │
+# │                                                                    │
+# │  Auto-add to project     filter: is:issue is:open → adds to board │
+# │  Item added to project   issue only → Backlog                     │
+# │  Item closed             issue only → Done                        │
+# │  Item reopened           issue only → Todo                        │
+# │  Code changes requested  → In Progress                            │
+# │  Code review approved    → In Review                              │
+# │  PR merged               → Done                                   │
+# │  Auto-close issue        when status = Done → closes the issue    │
+# │  PR linked to issue      → OFF (linking ≠ ready for review)       │
+# │                                                                    │
+# │  This Actions workflow handles what built-ins can't:               │
+# │                                                                    │
+# │  Issue assigned           → In Progress                            │
+# │  Issue unassigned (none)  → Todo                                   │
+# │  Issue closed not_planned → Invalid (overrides built-in Done)      │
+# │  Review requested on PR   → linked issues to In Review             │
+# │  PR closed without merge  → In Progress (if assigned) / Todo       │
+# └─────────────────────────────────────────────────────────────────────┘
 
 on:
   issues:
     types: [assigned, unassigned, closed]
   pull_request:
     types: [closed]
+  pull_request_review:
+    types: [submitted]
+  pull_request_target:
+    types: [review_requested]
 
 env:
   GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
@@ -33,6 +42,7 @@ env:
   PROJECT_ID: "PVT_kwDOC20SDc4BRpIZ"
   STATUS_TODO: "fb5b0bc3"
   STATUS_IN_PROGRESS: "8b6279b2"
+  STATUS_IN_REVIEW: "b3cfa0b7"
   STATUS_INVALID: "bf0b7b0b"
 
 jobs:
@@ -43,7 +53,6 @@ jobs:
     steps:
       - name: Move to In Progress
         run: |
-          # Ensure issue is in project (add if missing)
           ITEM_ID=$(gh project item-add $PROJECT_NUMBER \
             --owner $PROJECT_OWNER \
             --url "${{ github.event.issue.html_url }}" \
@@ -95,7 +104,7 @@ jobs:
           fi
 
   # ─── Issue closed as "not planned" → Invalid ───────────────────
-  # The built-in "Item closed" workflow sets Done for all closes.
+  # The built-in "Item closed" sets Done for all closes.
   # This overrides that for issues closed as "not planned".
   issue-closed-not-planned:
     if: >-
@@ -106,8 +115,8 @@ jobs:
     steps:
       - name: Override to Invalid
         run: |
-          # Small delay to let the built-in workflow set "Done" first, then override
-          sleep 3
+          # Delay to let the built-in "Item closed → Done" fire first, then override
+          sleep 5
 
           ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
             --owner $PROJECT_OWNER --limit 200 --format json | \
@@ -128,15 +137,17 @@ jobs:
             echo "Moved #${{ github.event.issue.number }} to Invalid (closed as not planned)"
           fi
 
-  # ─── PR closed without merge → linked issues back to Todo ─────
-  pr-closed-not-merged:
+  # ─── Review requested on PR → linked issues to In Review ──────
+  # This fires when a contributor clicks "Request review" — meaning
+  # they consider the work ready. PR just being opened doesn't mean
+  # it's ready for review (could be WIP/draft).
+  review-requested:
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == false
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'review_requested'
     runs-on: ubuntu-latest
     steps:
-      - name: Move linked issues back to Todo
+      - name: Move linked issues to In Review
         run: |
           PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} --json body -q '.body')
@@ -163,9 +174,65 @@ jobs:
                     projectId: \"$PROJECT_ID\"
                     itemId: \"$ITEM_ID\"
                     fieldId: \"$STATUS_FIELD_ID\"
-                    value: { singleSelectOptionId: \"$STATUS_TODO\" }
+                    value: { singleSelectOptionId: \"$STATUS_IN_REVIEW\" }
                   }) { projectV2Item { id } }
                 }"
-              echo "Moved #$NUM back to Todo (PR closed without merge)"
+              echo "Moved #$NUM to In Review (review requested)"
+            fi
+          done
+
+  # ─── PR closed without merge → In Progress or Todo ────────────
+  # If the issue is still assigned, the contributor is still working
+  # (maybe they'll open a new PR). Only drop to Todo if unassigned.
+  pr-closed-not-merged:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move linked issues based on assignment
+        run: |
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} --json body -q '.body')
+
+          ISSUE_NUMS=$(echo "$PR_BODY" | \
+            grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | \
+            grep -oE '[0-9]+' || true)
+
+          if [ -z "$ISSUE_NUMS" ]; then
+            echo "No linked issues found in PR body"
+            exit 0
+          fi
+
+          for NUM in $ISSUE_NUMS; do
+            # Check if issue still has assignees
+            ASSIGNEE_COUNT=$(gh issue view "$NUM" \
+              --repo ${{ github.repository }} --json assignees -q '.assignees | length')
+
+            if [ "$ASSIGNEE_COUNT" -gt 0 ]; then
+              TARGET="$STATUS_IN_PROGRESS"
+              TARGET_NAME="In Progress"
+            else
+              TARGET="$STATUS_TODO"
+              TARGET_NAME="Todo"
+            fi
+
+            ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
+              --owner $PROJECT_OWNER --limit 200 --format json | \
+              jq -r --arg N "$NUM" \
+              '.items[] | select(.content.number == ($N|tonumber)) | .id')
+
+            if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
+              gh api graphql -f query="
+                mutation {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: \"$PROJECT_ID\"
+                    itemId: \"$ITEM_ID\"
+                    fieldId: \"$STATUS_FIELD_ID\"
+                    value: { singleSelectOptionId: \"$TARGET\" }
+                  }) { projectV2Item { id } }
+                }"
+              echo "Moved #$NUM to $TARGET_NAME (PR closed without merge, assignees: $ASSIGNEE_COUNT)"
             fi
           done
