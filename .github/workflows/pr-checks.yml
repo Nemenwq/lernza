@@ -70,8 +70,13 @@ jobs:
           fi
 
   # ── PR quality checks ───────────────────────────────────────────
+  # Waits for auto-label so labels exist before we check them.
+  # !failure() lets this run when auto-label succeeds OR is skipped
+  # (skipped on labeled/unlabeled events), but blocks on failure.
   pr-checks:
+    needs: auto-label
     if: >-
+      !failure() &&
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.user.login != 'release-please[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
