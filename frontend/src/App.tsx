@@ -7,6 +7,7 @@ import { Dashboard } from "@/pages/dashboard"
 import { WorkspaceView } from "@/pages/workspace"
 import { Profile } from "@/pages/profile"
 import { NotFound } from "@/pages/not-found"
+import { CreateQuest } from "@/pages/create-quest"
 
 // ─── Theme Context ─────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ function pathToPage(pathname: string): { page: Page; workspaceId: number | null 
   if (clean === "/") return { page: "landing", workspaceId: null }
   if (clean === "/dashboard") return { page: "dashboard", workspaceId: null }
   if (clean === "/profile") return { page: "profile", workspaceId: null }
+  if (clean === "/create-quest") return { page: "create-quest", workspaceId: null }
 
   const wsMatch = clean.match(/^\/workspace\/(\d+)$/)
   if (wsMatch) return { page: "workspace", workspaceId: Number(wsMatch[1]) }

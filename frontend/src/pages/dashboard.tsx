@@ -25,9 +25,10 @@ const MOCK_OWNER = "GBXR...K2YQ"
 
 interface DashboardProps {
   onSelectWorkspace: (id: number) => void
+  onCreateQuest: () => void
 }
 
-export function Dashboard({ onSelectWorkspace }: DashboardProps) {
+export function Dashboard({ onSelectWorkspace, onCreateQuest }: DashboardProps) {
   const { connected, connect, shortAddress } = useWallet()
   const [filter, setFilter] = useState<"all" | "owned" | "enrolled">("all")
 
@@ -244,7 +245,7 @@ export function Dashboard({ onSelectWorkspace }: DashboardProps) {
                   : "You haven't enrolled in any quests yet. Browse available quests to get started."}
             </p>
             {filter === "all" || filter === "owned" ? (
-              <Button className="shimmer-on-hover">
+              <Button onClick={onCreateQuest} className="shimmer-on-hover">
                 <Plus className="h-4 w-4" />
                 Create Quest
               </Button>
