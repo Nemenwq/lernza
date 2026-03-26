@@ -1,4 +1,4 @@
-import React from "react"
+import React, { act } from "react"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
@@ -83,9 +83,19 @@ describe("Dashboard keyboard navigation", () => {
       </MemoryRouter>
     )
 
-    // Fallback: if the quest list doesn't render, fail with a clear message
+    // Debug: log all buttons to see what's available
     await vi.waitFor(
       () => {
+        const allButtons = screen.queryAllByRole("button")
+        console.log(
+          "All buttons found:",
+          allButtons.map(btn => ({
+            textContent: btn.textContent,
+            ariaLabel: btn.getAttribute("aria-label"),
+            name: btn.getAttribute("name"),
+          }))
+        )
+
         const btn = screen.queryByRole("button", { name: /quest alpha/i })
         if (!btn) {
           throw new Error("Quest card button not rendered. Check mocks and async loading.")
@@ -96,7 +106,9 @@ describe("Dashboard keyboard navigation", () => {
     )
     const cardButton = screen.getByRole("button", { name: /quest alpha/i })
 
-    fireEvent.click(cardButton)
+    act(() => {
+      fireEvent.click(cardButton)
+    })
     expect(mockNavigate).toHaveBeenCalledWith("/quest/7")
   }, 12000)
 })
