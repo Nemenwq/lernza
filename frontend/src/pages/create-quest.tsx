@@ -537,7 +537,10 @@ function Step3Review({
           address,
           step1Data.name,
           step1Data.description,
-          tokenAddress
+          "General",
+          [],
+          tokenAddress,
+          0 // Public visibility
         )
 
         if (questResult.status !== "SUCCESS") {

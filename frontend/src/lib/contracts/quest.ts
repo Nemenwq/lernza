@@ -37,12 +37,6 @@ export class QuestClient {
     }
   }
 
-  private getContract(): Contract {
-    if (!this.contract)
-      throw new Error("Quest contract not configured. Set VITE_QUEST_CONTRACT_ID.")
-    return this.contract
-  }
-
   // --- Read Operations ---
 
   async getQuest(questId: number): Promise<QuestInfo | null> {
@@ -133,7 +127,7 @@ export class QuestClient {
         fee: "100",
         networkPassphrase: NETWORK_PASSPHRASE,
       })
-        .addOperation(this.contract.call(method, ...args))
+        .addOperation(this.contract!.call(method, ...args))
         .setTimeout(30)
         .build()
 
@@ -155,7 +149,7 @@ export class QuestClient {
       fee: "100",
       networkPassphrase: NETWORK_PASSPHRASE,
     })
-      .addOperation(this.contract.call(method, ...args))
+      .addOperation(this.contract!.call(method, ...args))
       .setTimeout(30)
       .build()
 
