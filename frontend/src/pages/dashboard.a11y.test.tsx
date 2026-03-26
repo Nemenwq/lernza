@@ -83,30 +83,34 @@ describe("Dashboard keyboard navigation", () => {
       </MemoryRouter>
     )
 
-    // Debug: log all buttons to see what's available
-    await vi.waitFor(
-      () => {
-        const allButtons = screen.queryAllByRole("button")
-        console.log(
-          "All buttons found:",
-          allButtons.map(btn => ({
-            textContent: btn.textContent,
-            ariaLabel: btn.getAttribute("aria-label"),
-            name: btn.getAttribute("name"),
-          }))
-        )
+    // Wait for the quest card to be rendered
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          // Debug: log all buttons to see what's available
+          const allButtons = screen.queryAllByRole("button")
+          console.log(
+            "All buttons found:",
+            allButtons.map(btn => ({
+              textContent: btn.textContent,
+              ariaLabel: btn.getAttribute("aria-label"),
+              name: btn.getAttribute("name"),
+            }))
+          )
 
-        const btn = screen.queryByRole("button", { name: /quest alpha/i })
-        if (!btn) {
-          throw new Error("Quest card button not rendered. Check mocks and async loading.")
-        }
-        return btn
-      },
-      { timeout: 8000 }
-    )
-    const cardButton = screen.getByRole("button", { name: /quest alpha/i })
+          const btn = screen.queryByRole("button", { name: /open quest quest alpha/i })
+          if (!btn) {
+            throw new Error("Quest card button not rendered. Check mocks and async loading.")
+          }
+          return btn
+        },
+        { timeout: 8000 }
+      )
+    })
 
-    act(() => {
+    const cardButton = screen.getByRole("button", { name: /open quest quest alpha/i })
+
+    await act(async () => {
       fireEvent.click(cardButton)
     })
     expect(mockNavigate).toHaveBeenCalledWith("/quest/7")
