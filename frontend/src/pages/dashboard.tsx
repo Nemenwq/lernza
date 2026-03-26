@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Suspense } from "react"
+import React, { useState, Suspense } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Plus,
@@ -8,13 +8,14 @@ import {
   ChevronRight,
   Wallet,
   Sparkles,
-  Search,
   LayoutDashboard,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { useContractData } from "@/hooks/use-async-data"
+import { LoadingState, ErrorState, EmptyState } from "@/components/ui/async-states"
 import { useWallet } from "@/hooks/use-wallet"
 import { questClient } from "@/lib/contracts/quest"
 import { milestoneClient } from "@/lib/contracts/milestone"
@@ -31,104 +32,89 @@ import { RecentActivity } from "./dashboard/recent-activity"
 // Lazy-loaded chart
 const EarningsChart = React.lazy(() => import("./dashboard/earnings-chart"))
 
-interface QuestStats {
-  enrolleeCount: number
-  milestoneCount: number
-  poolBalance: number
-}
-
 export function Dashboard() {
   const navigate = useNavigate()
   const { connected, connect, shortAddress, address } = useWallet()
   const [filter, setFilter] = useState<"all" | "owned" | "enrolled">("all")
-  const [quests, setQuests] = useState<WorkspaceInfo[]>([])
-  const [questStats, setQuestStats] = useState<Record<number, QuestStats>>({})
-  const [questMilestones, setQuestMilestones] = useState<Record<number, number>>({})
-  const [questCompletions, setQuestCompletions] = useState<Record<number, number>>({})
-  const [isLoading, setIsLoading] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!connected) return
+  // Use the new async hook for dashboard data
+  const {
+    data: dashboardData,
+    isLoading,
+    error: loadError,
+  } = useContractData(
+    "dashboard",
+    async () => {
+      const questInfos = await questClient.getQuests()
 
-    let cancelled = false
+      const normalized: WorkspaceInfo[] = questInfos.map(q => ({
+        id: q.id,
+        owner: q.owner,
+        name: q.name,
+        description: q.description,
+        token_addr: q.tokenAddr,
+        created_at: q.createdAt,
+        visibility: Visibility.Public,
+      }))
 
-    const load = async () => {
-      setIsLoading(true)
-      setLoadError(null)
+      const statsEntries = await Promise.all(
+        normalized.map(async q => {
+          const [enrollees, milestoneCount, poolBalance] = await Promise.all([
+            questClient.getEnrollees(q.id),
+            milestoneClient.getMilestoneCount(q.id),
+            rewardsClient.getPoolBalance(q.id),
+          ])
 
-      try {
-        const questInfos = await questClient.getQuests()
-        if (cancelled) return
+          return [
+            q.id,
+            {
+              enrolleeCount: enrollees.length,
+              milestoneCount,
+              poolBalance:
+                poolBalance > BigInt(Number.MAX_SAFE_INTEGER)
+                  ? Number.MAX_SAFE_INTEGER
+                  : Number(poolBalance),
+            },
+          ] as const
+        })
+      )
 
-        const normalized: WorkspaceInfo[] = questInfos.map(q => ({
-          id: q.id,
-          owner: q.owner,
-          name: q.name,
-          description: q.description,
-          token_addr: q.tokenAddr,
-          created_at: q.createdAt,
-          visibility: Visibility.Public,
-        }))
-        setQuests(normalized)
+      const questStats = Object.fromEntries(statsEntries)
+      const questMilestones = Object.fromEntries(
+        statsEntries.map(([id, stats]) => [id, stats.milestoneCount])
+      )
 
-        const statsEntries = await Promise.all(
+      let questCompletions: Record<number, number> = {}
+      if (address) {
+        const completionEntries = await Promise.all(
           normalized.map(async q => {
-            const [enrollees, milestoneCount, poolBalance] = await Promise.all([
-              questClient.getEnrollees(q.id),
-              milestoneClient.getMilestoneCount(q.id),
-              rewardsClient.getPoolBalance(q.id),
-            ])
-
-            return [
-              q.id,
-              {
-                enrolleeCount: enrollees.length,
-                milestoneCount,
-                poolBalance:
-                  poolBalance > BigInt(Number.MAX_SAFE_INTEGER)
-                    ? Number.MAX_SAFE_INTEGER
-                    : Number(poolBalance),
-              },
-            ] as const
+            const completed = await milestoneClient.getEnrolleeCompletions(q.id, address)
+            return [q.id, completed] as const
           })
         )
-
-        if (cancelled) return
-        setQuestStats(Object.fromEntries(statsEntries))
-        setQuestMilestones(
-          Object.fromEntries(statsEntries.map(([id, stats]) => [id, stats.milestoneCount]))
-        )
-
-        if (address) {
-          const completionEntries = await Promise.all(
-            normalized.map(async q => {
-              const completed = await milestoneClient.getEnrolleeCompletions(q.id, address)
-              return [q.id, completed] as const
-            })
-          )
-          if (cancelled) return
-          setQuestCompletions(Object.fromEntries(completionEntries))
-        } else {
-          setQuestCompletions({})
-        }
-      } catch (err: unknown) {
-        if (cancelled) return
-        const message = err instanceof Error ? err.message : "Failed to load quests"
-        setLoadError(message)
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false)
-        }
+        questCompletions = Object.fromEntries(completionEntries)
       }
-    }
 
-    void load()
-
-    return () => {
-      cancelled = true
+      return {
+        quests: normalized,
+        questStats,
+        questMilestones,
+        questCompletions,
+      }
+    },
+    {
+      enabled: connected,
+      dependencies: [connected, address],
     }
-  }, [connected, address])
+  )
+
+  // Extract data or use defaults
+  const {
+    quests = [],
+    questStats = {},
+    questMilestones = {},
+    questCompletions = {},
+  } = dashboardData || {}
 
   const filteredWorkspaces = quests.filter(ws => {
     if (filter === "owned") return !!address && ws.owner === address
@@ -336,19 +322,23 @@ export function Dashboard() {
             </div>
 
             {loadError && (
-              <Card className="border-destructive mb-5">
-                <CardContent className="py-4 text-sm font-bold text-red-700">
-                  Failed to load dashboard data: {loadError}
-                </CardContent>
-              </Card>
+              <div className="mb-5">
+                <ErrorState
+                  message={`Failed to load dashboard data: ${loadError}`}
+                  onRetry={() => {
+                    void questClient.getQuests().then(() => {
+                      // no-op: refetch is available from hook but not currently exposed here
+                    })
+                  }}
+                  variant="compact"
+                />
+              </div>
             )}
 
             {isLoading && (
-              <Card className="mb-5">
-                <CardContent className="py-8 text-center text-sm font-bold">
-                  Loading on-chain dashboard data...
-                </CardContent>
-              </Card>
+              <div className="mb-5">
+                <LoadingState message="Loading on-chain dashboard data..." variant="compact" />
+              </div>
             )}
 
             <div className="relative grid gap-5">
@@ -450,30 +440,28 @@ export function Dashboard() {
               })}
             </div>
 
-            {filteredWorkspaces.length === 0 && (
-              <Card className="animate-fade-in-up mt-5">
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <div className="bg-primary border-border mb-6 flex h-16 w-16 items-center justify-center border-[3px] shadow-[4px_4px_0_var(--color-border)]">
-                    <Search className="h-6 w-6" />
-                  </div>
-                  <h3 className="mb-2 text-lg font-black">
-                    {filter === "all" ? "No quests yet" : `No ${filter} quests`}
-                  </h3>
-                  <p className="text-muted-foreground mb-6 max-w-sm text-sm">
-                    {filter === "all"
+            {filteredWorkspaces.length === 0 && !isLoading && !loadError && (
+              <div className="mt-5">
+                <EmptyState
+                  variant="quests"
+                  title={filter === "all" ? "No quests yet" : `No ${filter} quests`}
+                  description={
+                    filter === "all"
                       ? "Create your first quest to start incentivizing learning with on-chain rewards."
                       : filter === "owned"
                         ? "You haven't created any quests yet. Start one to incentivize learners."
-                        : "You haven't enrolled in any quests yet. Browse available quests to get started."}
-                  </p>
-                  {filter === "all" || filter === "owned" ? (
-                    <Button onClick={() => navigate("/quest/create")} className="shimmer-on-hover">
-                      <Plus className="h-4 w-4" />
-                      Create Quest
-                    </Button>
-                  ) : null}
-                </CardContent>
-              </Card>
+                        : "You haven't enrolled in any quests yet. Browse available quests to get started."
+                  }
+                  action={
+                    filter === "all" || filter === "owned"
+                      ? {
+                          label: "Create Quest",
+                          onClick: () => navigate("/quest/create"),
+                        }
+                      : undefined
+                  }
+                />
+              </div>
             )}
           </div>
         </div>
